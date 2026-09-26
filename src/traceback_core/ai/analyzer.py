@@ -1,9 +1,72 @@
 ﻿"""TRACEBACK V0.3 AI analysis engine."""
 
 import json
+import re
 
 from traceback_core.ai.client import ask_gemini
 from traceback_core.ai.schemas import AnalysisResult, Claim
+
+
+def _parse_json_response(raw_response: str) -> dict:
+    """Safely extract a JSON object from Gemini's response."""
+
+    if not raw_response or not raw_response.strip():
+        raise ValueError("Gemini returned an empty response.")
+
+    text = raw_response.strip()
+
+    # Remove Markdown code fences if Gemini adds them.
+    text = re.sub(
+        r"^```(?:json)?\s*",
+        "",
+        text,
+        flags=re.IGNORECASE,
+    )
+    text = re.sub(
+        r"\s*```$",
+        "",
+        text,
+    )
+
+    text = text.strip()
+
+    # First attempt: response is already valid JSON.
+    try:
+        data = json.loads(text)
+
+        if not isinstance(data, dict):
+            raise ValueError("Gemini JSON response is not an object.")
+
+        return data
+
+    except json.JSONDecodeError:
+        pass
+
+    # Second attempt: find the outermost JSON object.
+    start = text.find("{")
+    end = text.rfind("}")
+
+    if start != -1 and end > start:
+        candidate = text[start:end + 1]
+
+        try:
+            data = json.loads(candidate)
+
+            if not isinstance(data, dict):
+                raise ValueError(
+                    "Gemini JSON response is not an object."
+                )
+
+            return data
+
+        except json.JSONDecodeError as exc:
+            raise ValueError(
+                "Gemini returned malformed JSON."
+            ) from exc
+
+    raise ValueError(
+        "Gemini did not return a valid JSON object."
+    )
 
 
 def analyze_evidence(
@@ -34,6 +97,8 @@ CRITICAL RULES:
 6. Avoid strengthening the wording beyond what the evidence supports.
 7. Return ONLY valid JSON.
 8. Do not provide chain-of-thought.
+9. Do not wrap the JSON in Markdown code fences.
+10. Do not add any text before or after the JSON.
 
 USER QUESTION:
 {question}
@@ -65,17 +130,34 @@ Allowed claim_type values:
 
     raw_response = ask_gemini(prompt)
 
-    data = json.loads(raw_response)
+    data = _parse_json_response(raw_response)
 
-    claims = [
-        Claim(
-            claim_id=item["claim_id"],
-            text=item["text"],
-            evidence_ids=item.get("evidence_ids", []),
-            claim_type=item.get("claim_type", "factual"),
+    # Only allow evidence IDs that actually exist.
+    valid_evidence_ids = {
+        item["evidence_id"]
+        for item in evidence
+    }
+
+    claims = []
+
+    for item in data.get("claims", []):
+        evidence_ids = [
+            evidence_id
+            for evidence_id in item.get("evidence_ids", [])
+            if evidence_id in valid_evidence_ids
+        ]
+
+        claims.append(
+            Claim(
+                claim_id=item["claim_id"],
+                text=item["text"],
+                evidence_ids=evidence_ids,
+                claim_type=item.get(
+                    "claim_type",
+                    "factual",
+                ),
+            )
         )
-        for item in data.get("claims", [])
-    ]
 
     return AnalysisResult(
         answer=data.get("answer", ""),
