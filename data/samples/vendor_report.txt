@@ -1,0 +1,4 @@
+﻿Vendor A reported 12 incidents during the evaluation period.
+Vendor B reported 19 incidents during the evaluation period.
+Vendor A had the lowest observed incident rate among the evaluated vendors.
+Both vendors submitted compliance documentation.
